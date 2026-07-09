@@ -49,6 +49,8 @@ export default function Home() {
       {devices.map((device) => (
         <div key={device.deviceId}>{device.name ?? device.deviceId}</div>
       ))}
+      <div>user token</div>
+      <div>{data?.access_token}</div>
     </div>
   );
 }
