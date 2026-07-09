@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { BleClient, type BleDevice } from "@capacitor-community/bluetooth-le";
+import useSWR from "swr";
 
 export default function Home() {
   const [devices, setDevices] = useState<BleDevice[]>([]);
@@ -29,6 +30,15 @@ export default function Home() {
       pageDiv?.removeEventListener("pointerup", handlePointerUp);
     };
   }, []);
+
+  const { data } = useSWR("api/user-token", async () => {
+    const tokenRes = await fetch(`${window.location.origin}/api/user-token`, {
+      method: "POST",
+      body: JSON.stringify({ user_id: "jackmu" }),
+    });
+    const { access_token } = await tokenRes.json();
+    return { access_token };
+  });
 
   return (
     <div id="mainDiv" className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans text-black">

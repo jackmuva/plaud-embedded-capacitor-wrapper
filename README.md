@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## iOS (Capacitor) — Bluetooth wrapper
 
-## Getting Started
+Web Bluetooth (`navigator.bluetooth`) does not exist in any iOS browser or home-screen
+PWA, because every iOS web context runs on WebKit. To get Bluetooth on iPhone we wrap the
+web app in a thin [Capacitor](https://capacitorjs.com) native shell that loads the live
+Vercel URL and bridges BLE calls to native CoreBluetooth via
+[`@capacitor-community/bluetooth-le`](https://github.com/capacitor-community/bluetooth-le).
 
-First, run the development server:
+After the Capacitor packages are installed
+(`@capacitor/core`, `@capacitor/cli`, `@capacitor/ios` — all v8 to match the BLE plugin),
+the iOS project was generated with these steps:
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+**1. Create `capacitor.config.ts`** — the native shell loads the remote Vercel site and
+Capacitor injects the bridge, so `webDir` is required but unused at runtime:
+
+```ts
+import type { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'ai.plaud.pwademo',
+  appName: 'Plaud PWA Demo',
+  webDir: 'public',
+  server: {
+    url: 'https://pwa-demo-plaud.vercel.app',
+    cleartext: false,
+  },
+};
+
+export default config;
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**2. Generate the native iOS project** (must run *after* the config exists):
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npx cap add ios
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This scaffolds the `ios/` Xcode project and registers the BLE plugin. Re-run
+`npx cap sync ios` any time the config or installed plugins change.
 
-## Learn More
+**3. Add the Bluetooth capability keys to `ios/App/App/Info.plist`** — without the usage
+description the app crashes on first Bluetooth use. Add `bluetooth-central` to
+`UIBackgroundModes` only if BLE must run while the app is backgrounded:
 
-To learn more about Next.js, take a look at the following resources:
+```xml
+<key>NSBluetoothAlwaysUsageDescription</key>
+<string>Uses Bluetooth to connect and interact with peripheral BLE devices.</string>
+<key>UIBackgroundModes</key>
+<array>
+    <string>bluetooth-central</string>
+</array>
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+To build and run: `npx cap open ios`, set a signing Team in Xcode, and run on a **physical
+device** (BLE does not work in the Simulator). Because `server.url` points at Vercel, the
+app runs whatever is currently deployed there — deploy web changes before testing on device.
