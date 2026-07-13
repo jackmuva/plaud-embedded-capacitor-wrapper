@@ -28,6 +28,31 @@ export interface PlaudPenState {
   deviceAccessToken: number;
 }
 
+/** A recording stored on the device, from the `fileList` event. */
+export interface PlaudFile {
+  sn: string;
+  sessionId: number;
+  size: number;
+  scenes: number;
+  channels: number;
+  isOgg: boolean;
+  isMusic: boolean;
+  /** Duration in seconds. */
+  duration: number;
+}
+
+export interface PlaudFileList {
+  files: PlaudFile[];
+}
+
+export interface PlaudExportProgress {
+  sessionId: number;
+  progress: number;
+  message: string;
+}
+
+export type PlaudAudioFormat = "pcm" | "mp3" | "wav" | "opus";
+
 /**
  * JS interface for the native `PlaudSdk` Capacitor plugin
  * (see ios/PlaudPlugin/Sources/PlaudPlugin/PlaudSdkPlugin.swift).
@@ -41,7 +66,33 @@ export interface PlaudSdkPlugin {
   initSDK(options: { userAccessToken: string; customDomain: string }): Promise<void>;
   startScan(): Promise<void>;
   stopScan(): Promise<void>;
+  /**
+   * Connect to a device from a prior `scanResult`, identified by `uuid` (preferred) or
+   * `serialNumber`. Progress arrives via the `connectState` and `penState` events.
+   */
+  connectBleDevice(options: {
+    uuid?: string;
+    serialNumber?: string;
+    deviceToken?: string;
+  }): Promise<void>;
+  disconnect(): Promise<void>;
+  /**
+   * Unpair the device. With `clear: true` (default) the SDK also clears local pairing
+   * state so the next connect re-runs the handshake. Result arrives via the `depair` event.
+   */
+  depair(options?: { clear?: boolean }): Promise<void>;
   isConnected(): Promise<{ connected: boolean }>;
+  /** Request the recording list; results arrive via the `fileList` event. */
+  getFileList(options?: { startSessionId?: number }): Promise<void>;
+  /**
+   * Decode a recording to a file in the app's Documents/PlaudExports dir. Resolves with
+   * the written path; emits `exportProgress` events. `format` defaults to "mp3".
+   */
+  exportAudio(options: {
+    sessionId: number;
+    format?: PlaudAudioFormat;
+    channels?: number;
+  }): Promise<{ sessionId: number; outputPath: string }>;
 
   addListener(
     eventName: "scanResult",
@@ -62,6 +113,18 @@ export interface PlaudSdkPlugin {
   addListener(
     eventName: "bind",
     listener: (data: { sn: string | null; status: number; protVersion: number }) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "fileList",
+    listener: (data: PlaudFileList) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "exportProgress",
+    listener: (data: PlaudExportProgress) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "depair",
+    listener: (data: { status: number }) => void,
   ): Promise<PluginListenerHandle>;
 }
 

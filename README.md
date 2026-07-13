@@ -1,61 +1,254 @@
-## iOS (Capacitor) — Bluetooth wrapper
+# Plaud PWA Demo
+
+A Next.js web app that talks to Plaud recording hardware over Bluetooth. Because iOS has
+no Web Bluetooth, the web app is wrapped in a thin [Capacitor](https://capacitorjs.com)
+native shell, and Plaud's precompiled **native iOS SDK** is exposed to the web layer
+through a custom Capacitor plugin.
+
+---
+
+## 1. Why a native shell at all
 
 Web Bluetooth (`navigator.bluetooth`) does not exist in any iOS browser or home-screen
-PWA, because every iOS web context runs on WebKit. To get Bluetooth on iPhone we wrap the
-web app in a thin [Capacitor](https://capacitorjs.com) native shell that loads the live
-Vercel URL and bridges BLE calls to native CoreBluetooth via
-[`@capacitor-community/bluetooth-le`](https://github.com/capacitor-community/bluetooth-le).
+PWA — every iOS web context runs on WebKit, which does not implement it. To get Bluetooth
+on iPhone we wrap the web app in a Capacitor native shell that loads the live Vercel URL
+in a `WKWebView` and injects a **bridge** so JavaScript can call native code.
 
-After the Capacitor packages are installed
-(`@capacitor/core`, `@capacitor/cli`, `@capacitor/ios` — all v8 to match the BLE plugin),
-the iOS project was generated with these steps:
-
-**1. Create `capacitor.config.ts`** — the native shell loads the remote Vercel site and
-Capacitor injects the bridge, so `webDir` is required but unused at runtime:
+Capacitor is configured to load the remote site rather than bundled assets:
 
 ```ts
-import type { CapacitorConfig } from '@capacitor/cli';
-
+// capacitor.config.ts
 const config: CapacitorConfig = {
   appId: 'ai.plaud.pwademo',
   appName: 'Plaud PWA Demo',
+  // Required by Capacitor even when loading a remote URL; ignored at runtime
+  // because server.url is set.
   webDir: 'public',
   server: {
     url: 'https://pwa-demo-plaud.vercel.app',
     cleartext: false,
   },
 };
-
-export default config;
 ```
 
-**2. Generate the native iOS project** (must run *after* the config exists):
+> **Consequence of `server.url`:** the app runs whatever web build is currently deployed
+> to Vercel. **Deploy web changes before testing on device.** Native (Swift) changes, by
+> contrast, only take effect when you rebuild the app in Xcode.
+
+---
+
+## 2. Why generic `@capacitor-community/bluetooth-le` is not enough
+
+The project still depends on [`@capacitor-community/bluetooth-le`](https://github.com/capacitor-community/bluetooth-le),
+which exposes a generic Web-Bluetooth-style GATT API (`requestDevice`, `connect`, read/write
+characteristics). That is fine for simple peripherals, but it **cannot drive a Plaud device**:
+
+Plaud's BLE transport is a proprietary stack — a bind/auth handshake (`sn-sign` / `sn-verify`),
+a ChaCha20/AES secure channel, a custom binary command protocol, and AVC/OGG-Opus audio
+decoding. Reimplementing all of that in JavaScript over a generic GATT bridge is exactly the
+work Plaud's native SDK already does. So instead of layering on top of `bluetooth-le`, we
+**replace** it for Plaud interaction with the vendor SDK, surfaced through our own plugin.
+
+`bluetooth-le` remains installed (and is what forces the whole toolchain to Capacitor v8),
+but Plaud device I/O goes through `PlaudSdk`, described below.
+
+---
+
+## 3. How Plaud's native SDK fits into Capacitor
+
+Plaud ships three precompiled Swift/ObjC frameworks (arm64 **device-only** — no Simulator):
+
+| Framework | Role |
+|-----------|------|
+| `PlaudDeviceBasicSDK` | High-level facade (`PlaudDeviceAgent`) — the entry point we use. |
+| `PlaudBleSDK` | Low-level BLE transport, crypto, audio decode, model types. |
+| `PlaudWiFiSDK` | WiFi fast-transfer transport. |
+
+These own their own `CBCentralManager` and the entire device conversation. Our job is only
+to bridge them to the WebView. The data path:
+
+```
+   Web app (React, served from Vercel)
+        │  import { PlaudSdk } from "lib/plaudSdk"   (registerPlugin("PlaudSdk"))
+        │  PlaudSdk.initSDK({...}); PlaudSdk.startScan()
+        ▼
+   Capacitor bridge  (injected into the WKWebView, works for remote URLs too)
+        │  marshals the call across the JS↔native boundary
+        ▼
+   PlaudSdkPlugin.swift   (CAPPlugin, in the local PlaudPlugin SwiftPM package)
+        │  calls the facade + conforms to PlaudDeviceAgentProtocol
+        ▼
+   PlaudDeviceAgent.shared   (PlaudDeviceBasicSDK.framework)
+        │  scan / handshake / connect / sync / decode over CoreBluetooth
+        ▼
+   Plaud device
+```
+
+Callbacks flow back the other way: the SDK invokes `PlaudDeviceAgentProtocol` delegate
+methods on the plugin, which forwards them to JS as Capacitor plugin **events**
+(`notifyListeners`), consumed in React via `PlaudSdk.addListener(...)`.
+
+### 3.1 Packaging the frameworks — `ios/PlaudPlugin/`
+
+The native code lives in a **local SwiftPM package**, `ios/PlaudPlugin/`, mirroring how
+`bluetooth-le` is structured. This is the cleanest, most `cap sync`-safe approach:
+
+- The three `.framework`s were converted to `.xcframework`s and declared as SwiftPM
+  **binary targets**. SwiftPM then embeds **and code-signs** them into `App.app/Frameworks/`
+  automatically — no fragile hand-maintained "Embed Frameworks" build phase.
+
+  ```bash
+  # how the xcframeworks in ios/PlaudPlugin/Frameworks/ were produced:
+  xcodebuild -create-xcframework -framework ios/PlaudBleSDK.framework \
+    -output ios/PlaudPlugin/Frameworks/PlaudBleSDK.xcframework
+  # (repeated for PlaudWiFiSDK and PlaudDeviceBasicSDK)
+  ```
+
+- `ios/PlaudPlugin/Sources/PlaudPlugin/PlaudSdkPlugin.swift` is the bridge class. It
+  subclasses `CAPPlugin`, conforms to `CAPBridgedPlugin` (declares `jsName`/`identifier`
+  and the callable `pluginMethods`), and conforms to `PlaudDeviceAgentProtocol` to receive
+  device events. Current surface:
+  - **Methods:** `initSDK`, `startScan`, `stopScan`, `connectBleDevice`, `disconnect`,
+    `depair`, `isConnected`, `getFileList`, `exportAudio`.
+  - **Events:** `scanResult`, `scanTimeout`, `connectState`, `penState`, `bind`,
+    `fileList`, `exportProgress`, `depair`.
+
+  Patterns worth noting:
+  1. `connectBleDevice` retains the `BleDevice` objects handed to us during a scan and looks
+     one up by `uuid`/`serialNumber`, because JS can only pass identifiers, not the native
+     object the SDK requires.
+  2. `exportAudio` bridges the SDK's per-call `AudioExportCallback` — progress becomes an
+     `exportProgress` event and completion/error resolves/rejects the promise with the
+     written file path (under `Documents/PlaudExports/`). **`exportAudio` is self-contained:
+     it downloads the recording from the connected device, decodes the proprietary
+     AVC/OGG-Opus, and converts to your chosen format (mp3/wav/pcm/opus) in one call** — you
+     do *not* need a separate `syncFile`/`downloadFile` step. It does require an active,
+     handshake-complete connection; if the download comes back empty (e.g. auth incomplete
+     or an E2EE recording without the key) it errors instead of writing a file.
+  3. `depair(clear: true)` unpairs the device *and* clears local pairing/binding state, so
+     the next `connectBleDevice` runs a fresh handshake. The result arrives via the `depair`
+     event's `status`.
+
+The package is attached to the App target in `ios/App/App.xcodeproj/project.pbxproj` exactly
+the way `CapApp-SPM` is (a local package reference + product dependency). `npx cap sync`
+manages only `CapApp-SPM`, so these edits survive syncs.
+
+### 3.2 Registering the plugin — the non-obvious part
+
+**Capacitor 8 does not scan the runtime for plugins.** `CapacitorBridge.registerPlugins()`
+reads `capacitor.config.json` → `packageClassList` and registers each class *by name*. The
+Capacitor CLI only populates that list from **npm-installed** plugins:
+
+```json
+"packageClassList": [ "BluetoothLe" ]
+```
+
+Our `PlaudSdk` lives in a **local** package the CLI knows nothing about, so it is absent from
+that list. The symptom is a runtime error in JS:
+
+> `"PlaudSdk" plugin is not implemented on ios`
+
+(The class *is* compiled and linked into the app — this is purely a registration gap.)
+
+The fix is to register the instance manually in Capacitor's `capacitorDidLoad()` hook, which
+runs right after auto-registration and before the web content loads. We do this with a
+`CAPBridgeViewController` subclass:
+
+```swift
+// ios/App/App/MainViewController.swift
+import Capacitor
+import PlaudPlugin
+
+class MainViewController: CAPBridgeViewController {
+    override open func capacitorDidLoad() {
+        bridge?.registerPluginInstance(PlaudSdkPlugin())
+    }
+}
+```
+
+`registerPluginInstance` (unlike `registerPluginType`) registers regardless of the config
+list. `Main.storyboard`'s Bridge View Controller is pointed at this subclass
+(`customClass="MainViewController" customModule="App"`) so it is actually used.
+
+> **Rule of thumb:** an npm Capacitor plugin auto-registers via `packageClassList`; a local
+> plugin must be registered by hand in `capacitorDidLoad()`.
+
+---
+
+## 4. The web side
+
+- **`lib/plaudSdk.ts`** — `registerPlugin<PlaudSdkPlugin>("PlaudSdk")` with typed methods and
+  event listeners. In a plain browser (no native shell) these calls reject with
+  "not implemented", so guard with `Capacitor.isNativePlatform()`.
+- **`app/page.tsx`** — the full demo flow: mint a per-user JWT from `/api/user-token`, call
+  `initSDK({ userAccessToken, customDomain: "platform-us.plaud.ai" })` → `startScan()` → tap a
+  device to `connectBleDevice` → on `connectState`, `getFileList` → tap a recording to
+  `exportAudio` (with live `exportProgress`). An **Unpair** button (confirm-guarded, since it
+  is destructive) calls `depair({ clear: true })`.
+- **`app/api/user-token/route.ts` + `lib/plaud.ts`** — mint the per-user access token the SDK
+  needs for its handshake (partner OAuth → user token). `customDomain` is **domain-only**, no
+  `https://`.
+
+---
+
+## 5. Build & run
+
+Native SDK frameworks are **arm64 device builds**, so everything must run on a **physical
+iPhone** (never the Simulator).
 
 ```bash
-npx cap add ios
+npx cap sync ios     # after any web/plugin/config change
+npx cap open ios     # opens Xcode
 ```
 
-This scaffolds the `ios/` Xcode project and registers the BLE plugin. Re-run
-`npx cap sync ios` any time the config or installed plugins change.
+In Xcode: set a signing **Team**, select your device, and Run. Because `server.url` points at
+Vercel, make sure the web changes you want to test are **deployed** first. If you change Swift
+code (the plugin, `MainViewController`), you must rebuild the app in Xcode — a Vercel deploy
+alone won't pick it up.
 
-**3. Add the Bluetooth capability keys to `ios/App/App/Info.plist`** — without the usage
-description the app crashes on first Bluetooth use. Add `bluetooth-central` to
-`UIBackgroundModes` only if BLE must run while the app is backgrounded:
+Required `Info.plist` keys (already set in `ios/App/App/Info.plist`):
 
 ```xml
 <key>NSBluetoothAlwaysUsageDescription</key>
 <string>Uses Bluetooth to connect and interact with peripheral BLE devices.</string>
-<key>UIBackgroundModes</key>
-<array>
-    <string>bluetooth-central</string>
-</array>
+<key>UIBackgroundModes</key>            <!-- only needed for BLE while backgrounded -->
+<array><string>bluetooth-central</string></array>
 ```
 
-To build and run: `npx cap open ios`, set a signing Team in Xcode, and run on a **physical
-device** (BLE does not work in the Simulator). Because `server.url` points at Vercel, the
-app runs whatever is currently deployed there — deploy web changes before testing on device.
+> WiFi fast transfer (`PlaudWiFiAgent`) additionally requires the **Hotspot Configuration**
+> entitlement — not enabled yet, since the plugin currently covers BLE scan/connect, file
+> listing, on-device export, and unpair (no WiFi path).
 
-**3. Running on XCode**
-```bash
-npx cap open ios
-```
+---
+
+## 6. File map
+
+| Path | Purpose |
+|------|---------|
+| `capacitor.config.ts` | Loads remote Vercel URL, injects bridge. |
+| `ios/PlaudPlugin/Package.swift` | Local SwiftPM package: Plaud xcframeworks + plugin. |
+| `ios/PlaudPlugin/Frameworks/*.xcframework` | Plaud SDK, packaged for SwiftPM embedding. |
+| `ios/PlaudPlugin/Sources/PlaudPlugin/PlaudSdkPlugin.swift` | The JS↔SDK bridge (`PlaudSdk`). |
+| `ios/App/App/MainViewController.swift` | Registers the local plugin (`capacitorDidLoad`). |
+| `ios/App/App/Base.lproj/Main.storyboard` | Points the bridge VC at `MainViewController`. |
+| `ios/App/App.xcodeproj/project.pbxproj` | Attaches `PlaudPlugin` to the App target. |
+| `lib/plaudSdk.ts` | Typed JS wrapper (`registerPlugin`). |
+| `app/page.tsx` | Demo UI: init → scan → connect → list → export, plus unpair. |
+
+---
+
+## 7. Extending the plugin
+
+To add device features (e.g. `connectBleDevice`, `getFileList`, `exportAudio`), follow the
+same pattern in `PlaudSdkPlugin.swift`:
+
+1. Add a `CAPPluginMethod(name:...)` entry to `pluginMethods` and an `@objc func` handler.
+2. For SDK results delivered via `PlaudDeviceAgentProtocol`, implement the delegate method and
+   forward it with `notifyListeners(event, data:)`.
+3. Mirror the new method/event in `lib/plaudSdk.ts`.
+4. Verify signatures against the frameworks' real `.swiftinterface` files (under each
+   `*.framework/Modules/*.swiftmodule/arm64-apple-ios.swiftinterface`), not just
+   `ios-sdk-reference.md` — the doc is generated and can drift.
+
+Remember: adding or renaming a plugin method changes the native binary, so it needs an Xcode
+rebuild + redeploy to the device, not just a Vercel deploy.
