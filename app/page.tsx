@@ -9,6 +9,7 @@ import {
   type PlaudFile,
 } from "@/lib/plaud-sdk";
 import { transcribeExportedFile } from "@/lib/transcribe";
+import { FileModal, type FileResult } from "./FileModal";
 import useSWR from "swr";
 
 const PLAUD_DOMAIN = "platform-us.plaud.ai";
@@ -61,11 +62,6 @@ const FileAudioIcon = ({ className, size = 18 }: IconProps) => (
     <path d="M8 16a2 2 0 1 0 4 0V9l4 1.5" />
   </svg>
 );
-const CloseIcon = ({ className, size = 20 }: IconProps) => (
-  <svg {...svg(size, className)}>
-    <path d="M18 6 6 18M6 6l12 12" />
-  </svg>
-);
 const FileTextIcon = ({ className, size = 16 }: IconProps) => (
   <svg {...svg(size, className)}>
     <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
@@ -97,13 +93,11 @@ export default function Home() {
   const [connected, setConnected] = useState(false);
   const [recording, setRecording] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
-  const [exportInfo, setExportInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [playback, setPlayback] = useState<{ sessionId: number; src: string } | null>(
-    null,
-  );
-  const [transcribeStatus, setTranscribeStatus] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState<string | null>(null);
+  // Per-session export + transcription cache, so an already-processed file re-opens
+  // instantly instead of re-exporting and re-transcribing.
+  const [results, setResults] = useState<Record<number, FileResult>>({});
+  const [openSessionId, setOpenSessionId] = useState<number | null>(null);
   const [scanning, setScanning] = useState(false);
   const initedRef = useRef(false);
 
@@ -155,7 +149,14 @@ export default function Home() {
         }),
         await PlaudSdk.addListener("exportProgress", (p) => {
           console.log("[Plaud] exportProgress", p);
-          setExportInfo(`session ${p.sessionId}: ${p.progress}% ${p.message}`);
+          setResults((prev) => ({
+            ...prev,
+            [p.sessionId]: {
+              ...prev[p.sessionId],
+              status: prev[p.sessionId]?.status ?? "exporting",
+              exportInfo: `${p.progress}% ${p.message}`,
+            },
+          }));
         }),
         // Recording is driven by the physical device, not the app. Surface the
         // start/stop/pause/resume events so they're visible, and refresh the file
@@ -192,6 +193,8 @@ export default function Home() {
           setFiles([]);
           setRecording(null);
           setIsLive(false);
+          setResults({});
+          setOpenSessionId(null);
         }),
       );
     })();
@@ -261,11 +264,30 @@ export default function Home() {
     }
   };
 
-  const handleExport = async (f: PlaudFile) => {
+  const updateResult = (sessionId: number, patch: Partial<FileResult>) =>
+    setResults((prev) => ({
+      ...prev,
+      [sessionId]: { ...prev[sessionId], ...patch },
+    }));
+
+  // Opening a file: if it's already been exported + transcribed, just show the cached
+  // result in the modal. Otherwise kick off the export + transcription flow.
+  const handleFileClick = (f: PlaudFile) => {
+    setOpenSessionId(f.sessionId);
+    if (results[f.sessionId]?.status === "ready") return;
+    void exportAndTranscribe(f);
+  };
+
+  const exportAndTranscribe = async (f: PlaudFile) => {
     setError(null);
-    setExportInfo(`session ${f.sessionId}: starting…`);
-    setTranscribeStatus(null);
-    setTranscript(null);
+    if (!ensureNative()) return;
+    updateResult(f.sessionId, {
+      status: "exporting",
+      exportInfo: "starting…",
+      error: undefined,
+      transcript: null,
+      transcribeStatus: undefined,
+    });
     console.log("[Plaud] exportAudio →", f.sessionId);
     try {
       const { outputPath } = await PlaudSdk.exportAudio({
@@ -273,14 +295,19 @@ export default function Home() {
         format: "mp3",
       });
       console.log("[Plaud] exportAudio done", f.sessionId, outputPath);
-      setExportInfo(`session ${f.sessionId}: saved → ${outputPath}`);
       const src = Capacitor.convertFileSrc(outputPath);
-      setPlayback({ sessionId: f.sessionId, src });
-      await handleTranscribe(outputPath);
+      updateResult(f.sessionId, {
+        status: "transcribing",
+        src,
+        exportInfo: `saved → ${outputPath}`,
+      });
+      await runTranscribe(f.sessionId, outputPath);
     } catch (err) {
       console.error("[Plaud] exportAudio failed", f.sessionId, err);
-      setError(err instanceof Error ? err.message : String(err));
-      setExportInfo(null);
+      updateResult(f.sessionId, {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -288,31 +315,40 @@ export default function Home() {
   // `outputPath` is the raw native path from exportAudio; its bytes are read through the
   // native bridge (readExportedFile) because convertFileSrc() URLs aren't fetchable from
   // the remote-loaded WebView.
-  const handleTranscribe = async (outputPath: string) => {
+  const runTranscribe = async (sessionId: number, outputPath: string) => {
     const token = data?.access_token;
     if (!token) {
-      setError("User token not ready — can't transcribe yet.");
+      updateResult(sessionId, {
+        status: "error",
+        error: "User token not ready — can't transcribe yet.",
+      });
       return;
     }
     try {
       const buffer = await readExportedFile(outputPath);
       const task = await transcribeExportedFile(buffer, "mp3", token, (p) => {
-        setTranscribeStatus(
-          p.phase === "uploading"
-            ? `uploading to Plaud… ${p.percent ?? 0}%`
-            : p.phase === "finalizing"
-              ? "finalizing upload…"
-              : p.phase === "submitting"
-                ? "submitting for transcription…"
-                : `transcribing… (${p.status})`,
-        );
+        updateResult(sessionId, {
+          transcribeStatus:
+            p.phase === "uploading"
+              ? `uploading to Plaud… ${p.percent ?? 0}%`
+              : p.phase === "finalizing"
+                ? "finalizing upload…"
+                : p.phase === "submitting"
+                  ? "submitting for transcription…"
+                  : `transcribing… (${p.status})`,
+        });
       });
-      setTranscribeStatus("transcription complete");
-      setTranscript(task.data.text ?? null);
+      updateResult(sessionId, {
+        status: "ready",
+        transcribeStatus: "transcription complete",
+        transcript: task.data.text ?? null,
+      });
     } catch (err) {
       console.error("[Plaud] transcription failed", err);
-      setError(err instanceof Error ? err.message : String(err));
-      setTranscribeStatus(null);
+      updateResult(sessionId, {
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -507,45 +543,54 @@ export default function Home() {
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {files.map((f) => (
-                  <button
-                    key={f.sessionId}
-                    onClick={() => handleExport(f)}
-                    className="dev-row"
-                  >
-                    <span className="flex items-center gap-3 min-w-0">
-                      <FileAudioIcon
-                        size={18}
-                        className="shrink-0"
-                      />
-                      <span
-                        className="mono text-[14px]"
-                        style={{ color: "var(--dev-text-light)" }}
-                      >
-                        #{f.sessionId}
-                      </span>
-                    </span>
-                    <span
-                      className="mono shrink-0 text-[12px]"
-                      style={{ color: "var(--dev-text-faint)" }}
+                {files.map((f) => {
+                  const r = results[f.sessionId];
+                  return (
+                    <button
+                      key={f.sessionId}
+                      onClick={() => handleFileClick(f)}
+                      className="dev-row"
                     >
-                      {f.duration}s · {(f.size / 1024).toFixed(0)} KB
-                    </span>
-                  </button>
-                ))}
+                      <span className="flex items-center gap-3 min-w-0">
+                        <FileAudioIcon size={18} className="shrink-0" />
+                        <span
+                          className="mono text-[14px]"
+                          style={{ color: "var(--dev-text-light)" }}
+                        >
+                          #{f.sessionId}
+                        </span>
+                        {r?.status === "ready" && (
+                          <span
+                            className="flex items-center gap-1 text-[11px]"
+                            style={{ color: "var(--status-ok)" }}
+                          >
+                            <FileTextIcon size={12} />
+                            transcribed
+                          </span>
+                        )}
+                        {(r?.status === "exporting" || r?.status === "transcribing") && (
+                          <span
+                            className="text-[11px]"
+                            style={{ color: "var(--dev-accent-blue)" }}
+                          >
+                            processing…
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        className="mono shrink-0 text-[12px]"
+                        style={{ color: "var(--dev-text-faint)" }}
+                      >
+                        {f.duration}s · {(f.size / 1024).toFixed(0)} KB
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </section>
         )}
 
-        {exportInfo && (
-          <p
-            className="mono break-all text-center text-[11px]"
-            style={{ color: "var(--dev-text-faint)" }}
-          >
-            {exportInfo}
-          </p>
-        )}
       </main>
 
       {/* Footer band */}
@@ -574,73 +619,20 @@ export default function Home() {
         </span>
       </footer>
 
-      {/* Playback modal — shown once a recording has finished exporting. */}
-      {playback && (
-        <div
-          className="fixed inset-0 z-30 flex items-end justify-center p-4 sm:items-center"
-          style={{ background: "rgba(0,0,0,0.6)" }}
-          onClick={() => setPlayback(null)}
-        >
-          <div
-            className="dev-card w-full max-w-md p-5"
-            style={{ boxShadow: "var(--shadow-lg)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <p className="overline">Playback</p>
-                <h3 className="mono mt-1 text-[18px]">
-                  Session #{playback.sessionId}
-                </h3>
-              </div>
-              <button
-                onClick={() => setPlayback(null)}
-                aria-label="Close"
-                style={{ color: "var(--dev-text-dim)" }}
-              >
-                <CloseIcon size={22} />
-              </button>
-            </div>
-
-            <audio
-              className="w-full"
-              src={playback.src}
-              controls
-              autoPlay
-              style={{ colorScheme: "dark" }}
+      {/* File modal — playback + transcript for the selected recording. */}
+      {openSessionId != null &&
+        (() => {
+          const f = files.find((x) => x.sessionId === openSessionId);
+          if (!f) return null;
+          return (
+            <FileModal
+              file={f}
+              result={results[openSessionId]}
+              onClose={() => setOpenSessionId(null)}
+              onRetry={() => void exportAndTranscribe(f)}
             />
-
-            {transcribeStatus && (
-              <p
-                className="mono mt-4 flex items-center gap-2 text-[12px]"
-                style={{ color: "var(--dev-accent-blue)" }}
-              >
-                {transcribeStatus}
-              </p>
-            )}
-
-            {transcript && (
-              <div className="mt-3">
-                <p className="overline mb-2 flex items-center gap-1.5">
-                  <FileTextIcon size={14} />
-                  Transcript
-                </p>
-                <div
-                  className="max-h-48 overflow-y-auto rounded p-3 text-[13px]"
-                  style={{
-                    background: "var(--dev-surface-input)",
-                    border: "1px solid var(--dev-border-subtle)",
-                    color: "var(--dev-text-light)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {transcript}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+          );
+        })()}
     </div>
   );
 }
