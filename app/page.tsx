@@ -19,6 +19,9 @@ export default function Home() {
   const [recording, setRecording] = useState<string | null>(null);
   const [exportInfo, setExportInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [playback, setPlayback] = useState<{ sessionId: number; src: string } | null>(
+    null,
+  );
   const initedRef = useRef(false);
 
   // Mint the per-user JWT the SDK needs for its handshake.
@@ -175,6 +178,7 @@ export default function Home() {
       });
       console.log("[Plaud] exportAudio done", f.sessionId, outputPath);
       setExportInfo(`session ${f.sessionId}: saved → ${outputPath}`);
+      setPlayback({ sessionId: f.sessionId, src: Capacitor.convertFileSrc(outputPath) });
     } catch (err) {
       console.error("[Plaud] exportAudio failed", f.sessionId, err);
       setError(err instanceof Error ? err.message : String(err));
@@ -278,6 +282,26 @@ export default function Home() {
       <div className="mt-4 text-xs text-zinc-400">
         token: {data?.access_token ? "ready" : "loading…"}
       </div>
+
+      {/* Playback modal — shown once a recording has finished exporting. */}
+      {playback && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/40 p-6">
+          <div className="w-full max-w-sm rounded-lg bg-white p-4 shadow-lg">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                Session #{playback.sessionId}
+              </h2>
+              <button
+                onClick={() => setPlayback(null)}
+                className="text-sm text-zinc-400 active:text-zinc-600"
+              >
+                Close
+              </button>
+            </div>
+            <audio className="w-full" src={playback.src} controls autoPlay />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
