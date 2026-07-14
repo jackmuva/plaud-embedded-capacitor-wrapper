@@ -63,6 +63,7 @@ export async function transcribeExportedFile(
   const fileRes = await fetch(fileSrc);
   if (!fileRes.ok) throw new Error(`Failed to read exported file (${fileRes.status})`);
   const buffer = await fileRes.arrayBuffer();
+  console.log("buffer: ", buffer);
 
   onProgress?.({ phase: "uploading", percent: 0 });
   const presigned = await postJson<PresignedUploadUrls>("/api/transcription/presign", {
@@ -70,6 +71,7 @@ export async function transcribeExportedFile(
     filesize: buffer.byteLength,
     filetype,
   });
+  console.log("presigned", presigned);
 
   const partList: UploadPart[] = [];
   for (const part of presigned.Parts) {
