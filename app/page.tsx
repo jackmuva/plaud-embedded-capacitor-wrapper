@@ -376,7 +376,7 @@ export default function Home() {
     <div className="flex w-full flex-1 flex-col overflow-x-hidden">
       {/* Fixed frosted chrome */}
       <header
-        className="sticky top-0 z-20 flex items-center justify-between border-b px-5 py-3.5"
+        className="sticky top-5 z-20 flex items-center justify-between border-b px-5 py-3.5"
         style={{
           borderColor: "var(--dev-border-subtle)",
           background: "rgba(15,15,15,0.72)",
@@ -410,7 +410,7 @@ export default function Home() {
         </span>
       </header>
 
-      <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 py-8">
+      <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-6 px-5 py-10">
         {/* Intro */}
         <section className="reveal">
           <p className="overline">Plaud SDK · reference app</p>
