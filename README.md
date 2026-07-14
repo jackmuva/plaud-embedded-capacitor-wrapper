@@ -183,11 +183,54 @@ list. `Main.storyboard`'s Bridge View Controller is pointed at this subclass
 - **`app/page.tsx`** — the full demo flow: mint a per-user JWT from `/api/user-token`, call
   `initSDK({ userAccessToken, customDomain: "platform-us.plaud.ai" })` → `startScan()` → tap a
   device to `connectBleDevice` → on `connectState`, `getFileList` → tap a recording to
-  `exportAudio` (with live `exportProgress`). An **Unpair** button (confirm-guarded, since it
-  is destructive) calls `depair({ clear: true })`.
+  `exportAudio` (with live `exportProgress`), which then automatically kicks off the upload +
+  transcription flow below. An **Unpair** button (confirm-guarded, since it is destructive)
+  calls `depair({ clear: true })`.
 - **`app/api/user-token/route.ts` + `lib/plaud.ts`** — mint the per-user access token the SDK
   needs for its handshake (partner OAuth → user token). `customDomain` is **domain-only**, no
   `https://`.
+
+### 4.1 Upload + transcription, after `exportAudio`
+
+`exportAudio` only writes the decoded mp3 to the device's local filesystem
+(`Documents/PlaudExports/`) — it isn't reachable by Plaud's Transcription API, which requires a
+public download URL. So each export is pushed through Plaud's **File Upload API** to get one,
+then handed to the **Transcription API**:
+
+```
+exportAudio() → local file
+     │  fetch(Capacitor.convertFileSrc(outputPath)) — only the WebView can read the file's bytes
+     ▼
+lib/transcribe.ts  transcribeExportedFile()
+     │  1. POST /api/transcription/presign   → chunked S3 presigned PUT URLs (5 MB parts)
+     │  2. PUT each chunk directly to S3 from the browser, collecting the `ETag` response header
+     │  3. POST /api/transcription/complete  → finalizes the multipart upload, returns a
+     │                                          `DownloadUrl` (valid 24h)
+     │  4. POST /api/transcription/submit    → submits DownloadUrl, returns a transcription_id
+     │  5. poll GET /api/transcription/status/[id] every 5s until SUCCESS/FAILURE/REVOKED
+     ▼
+transcript text, shown in the playback modal
+```
+
+- **`lib/plaudTranscription.ts`** — server-only wrapper around Plaud's File Upload API
+  (`generatePresignedUploadUrls`, `completeMultipartUpload`) and Transcription API
+  (`submitTranscription`, `getTranscriptionTask`).
+- **`app/api/transcription/{presign,complete,submit,status/[id]}/route.ts`** — thin proxy routes.
+  They exist so the two different Plaud credential types never reach the client: file upload
+  uses the same per-user Bearer token as the SDK (`access_token`, passed up from the client,
+  which already holds it for `initSDK`), while transcription submit/status use partner client
+  credentials (`X-Client-Id` / `X-Client-Api-Key`, from `PLAUD_CLIENT_ID` / `PLAUD_API_KEY`) that
+  must stay server-side.
+- **`lib/transcribe.ts`** — client-side orchestration. It's the only piece that touches the raw
+  file bytes (the API routes never see them — S3 multipart PUTs go straight from the browser to
+  the presigned URLs), and it drives the presign → upload → complete → submit → poll sequence.
+- Region: currently hardcoded to `https://platform-us.plaud.ai/developer/api` in `lib/plaud.ts`
+  (`BASE_URL`, shared by both the OAuth and transcription helpers). Switch it if you need the
+  Japan deployment (`platform-jp.plaud.ai`); EU/Singapore aren't available yet.
+- **Known risk:** capturing the S3 `ETag` response header from a browser `fetch()` requires the
+  bucket's CORS config to include `ExposeHeaders: ["ETag"]`. If Plaud's bucket isn't configured
+  for browser (as opposed to native SDK) uploads, part uploads will fail with a clear error
+  rather than silently omitting the ETag — that's the first thing to check if uploads fail here.
 
 ---
 
@@ -234,6 +277,9 @@ Required `Info.plist` keys (already set in `ios/App/App/Info.plist`):
 | `ios/App/App.xcodeproj/project.pbxproj` | Attaches `PlaudPlugin` to the App target. |
 | `lib/plaudSdk.ts` | Typed JS wrapper (`registerPlugin`). |
 | `app/page.tsx` | Demo UI: init → scan → connect → list → export, plus unpair. |
+| `lib/plaudTranscription.ts` | Server-only File Upload API + Transcription API calls. |
+| `app/api/transcription/*/route.ts` | Proxy routes so upload/transcription credentials stay server-side. |
+| `lib/transcribe.ts` | Client-side presign → S3 upload → complete → submit → poll orchestration. |
 
 ---
 

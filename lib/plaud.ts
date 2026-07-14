@@ -1,4 +1,4 @@
-const BASE_URL = "https://platform-us.plaud.ai/developer/api";
+export const BASE_URL = "https://platform-us.plaud.ai/developer/api";
 
 /** Error thrown when an upstream Plaud API call fails, carrying its HTTP status. */
 export class PlaudApiError extends Error {
@@ -11,7 +11,7 @@ export class PlaudApiError extends Error {
   }
 }
 
-function requireEnv(key: string): string {
+export function requireEnv(key: string): string {
   const val = process.env[key];
   if (!val) throw new Error(`Missing required env var: ${key}`);
   return val;

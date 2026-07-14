@@ -6,6 +6,7 @@ import {
   type PlaudScanDevice,
   type PlaudFile,
 } from "@/lib/plaudSdk";
+import { transcribeExportedFile } from "@/lib/transcribe";
 import useSWR from "swr";
 
 const PLAUD_DOMAIN = "platform-us.plaud.ai";
@@ -22,6 +23,8 @@ export default function Home() {
   const [playback, setPlayback] = useState<{ sessionId: number; src: string } | null>(
     null,
   );
+  const [transcribeStatus, setTranscribeStatus] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<string | null>(null);
   const initedRef = useRef(false);
 
   // Mint the per-user JWT the SDK needs for its handshake.
@@ -170,6 +173,8 @@ export default function Home() {
   const handleExport = async (f: PlaudFile) => {
     setError(null);
     setExportInfo(`session ${f.sessionId}: starting…`);
+    setTranscribeStatus(null);
+    setTranscript(null);
     console.log("[Plaud] exportAudio →", f.sessionId);
     try {
       const { outputPath } = await PlaudSdk.exportAudio({
@@ -178,11 +183,41 @@ export default function Home() {
       });
       console.log("[Plaud] exportAudio done", f.sessionId, outputPath);
       setExportInfo(`session ${f.sessionId}: saved → ${outputPath}`);
-      setPlayback({ sessionId: f.sessionId, src: Capacitor.convertFileSrc(outputPath) });
+      const src = Capacitor.convertFileSrc(outputPath);
+      setPlayback({ sessionId: f.sessionId, src });
+      await handleTranscribe(src);
     } catch (err) {
       console.error("[Plaud] exportAudio failed", f.sessionId, err);
       setError(err instanceof Error ? err.message : String(err));
       setExportInfo(null);
+    }
+  };
+
+  // Upload the just-exported mp3 to Plaud's storage and run it through transcription.
+  const handleTranscribe = async (fileSrc: string) => {
+    const token = data?.access_token;
+    if (!token) {
+      setError("User token not ready — can't transcribe yet.");
+      return;
+    }
+    try {
+      const task = await transcribeExportedFile(fileSrc, "mp3", token, (p) => {
+        setTranscribeStatus(
+          p.phase === "uploading"
+            ? `uploading to Plaud… ${p.percent ?? 0}%`
+            : p.phase === "finalizing"
+              ? "finalizing upload…"
+              : p.phase === "submitting"
+                ? "submitting for transcription…"
+                : `transcribing… (${p.status})`,
+        );
+      });
+      setTranscribeStatus("transcription complete");
+      setTranscript(task.data.text ?? null);
+    } catch (err) {
+      console.error("[Plaud] transcription failed", err);
+      setError(err instanceof Error ? err.message : String(err));
+      setTranscribeStatus(null);
     }
   };
 
@@ -299,6 +334,14 @@ export default function Home() {
               </button>
             </div>
             <audio className="w-full" src={playback.src} controls autoPlay />
+            {transcribeStatus && (
+              <div className="mt-3 text-xs text-zinc-500">{transcribeStatus}</div>
+            )}
+            {transcript && (
+              <div className="mt-2 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-xs text-zinc-700">
+                {transcript}
+              </div>
+            )}
           </div>
         </div>
       )}
