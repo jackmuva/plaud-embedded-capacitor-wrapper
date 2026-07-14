@@ -61,7 +61,10 @@ export async function transcribeExportedFile(
   console.log("transcribing");
   console.log(fileSrc, filetype, accessToken);
   const fileRes = await fetch(fileSrc);
-  if (!fileRes.ok) throw new Error(`Failed to read exported file (${fileRes.status})`);
+  if (!fileRes.ok) {
+    console.log("not ok", fileRes);
+    throw new Error(`Failed to read exported file (${fileRes.status})`);
+  }
   const buffer = await fileRes.arrayBuffer();
   console.log("buffer: ", buffer);
 
@@ -88,7 +91,7 @@ export async function transcribeExportedFile(
     if (!etag) {
       throw new Error(
         `Part ${part.PartNumber} upload didn't return an ETag header — the S3 bucket's ` +
-          `CORS config must expose it (ExposeHeaders: ["ETag"]) for browser uploads`,
+        `CORS config must expose it (ExposeHeaders: ["ETag"]) for browser uploads`,
       );
     }
     partList.push({ PartNumber: part.PartNumber, ETag: etag });
