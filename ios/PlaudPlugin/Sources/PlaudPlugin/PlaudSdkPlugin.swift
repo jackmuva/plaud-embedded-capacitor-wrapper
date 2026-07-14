@@ -30,7 +30,8 @@ public class PlaudSdkPlugin: CAPPlugin, CAPBridgedPlugin, PlaudDeviceAgentProtoc
         CAPPluginMethod(name: "isConnected", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getFileList", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "exportAudio", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "readFile", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "readFile", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "putBinary", returnType: CAPPluginReturnPromise)
     ]
 
     /// `connectBleDevice` needs the actual `BleDevice` the SDK handed us during a scan —
@@ -225,6 +226,44 @@ public class PlaudSdkPlugin: CAPPlugin, CAPBridgedPlugin, PlaudDeviceAgentProtoc
                 call.reject("Failed to read file at \(fileURL.path): \(error.localizedDescription)")
             }
         }
+    }
+
+    /// PUT raw bytes (base64-encoded in `data`) to an arbitrary URL via a native
+    /// `URLSession` request, resolving with `{ status, etag }`. Used for the S3 presigned
+    /// multipart part uploads in the transcription flow: the WebView loads a remote origin,
+    /// so a browser `fetch(PUT)` to the S3 presigned URL is blocked by CORS (and the `ETag`
+    /// response header wouldn't be readable without the bucket setting `ExposeHeaders`). A
+    /// native request has no CORS restrictions and can read every response header.
+    @objc func putBinary(_ call: CAPPluginCall) {
+        guard let urlString = call.getString("url"), let url = URL(string: urlString) else {
+            call.reject("url is required")
+            return
+        }
+        guard let base64 = call.getString("data"), let body = Data(base64Encoded: base64) else {
+            call.reject("data (base64-encoded body) is required")
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        // Only set Content-Type when the caller asks — S3 presigned signatures often don't
+        // include it, and sending an unsigned header can trigger SignatureDoesNotMatch.
+        if let contentType = call.getString("contentType") {
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        }
+        let task = URLSession.shared.uploadTask(with: request, from: body) { _, response, error in
+            if let error = error {
+                call.reject("PUT failed: \(error.localizedDescription)")
+                return
+            }
+            guard let http = response as? HTTPURLResponse else {
+                call.reject("PUT failed: no HTTP response")
+                return
+            }
+            let etag = http.value(forHTTPHeaderField: "ETag")
+                ?? http.value(forHTTPHeaderField: "Etag")
+            call.resolve(["status": http.statusCode, "etag": etag as Any])
+        }
+        task.resume()
     }
 
     // MARK: - PlaudDeviceAgentProtocol

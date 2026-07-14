@@ -137,6 +137,17 @@ export interface PlaudSdkPlugin {
    * raw `outputPath` from `exportAudio` or a `convertFileSrc()` URL.
    */
   readFile(options: { path: string }): Promise<{ data: string }>;
+  /**
+   * PUT raw bytes (base64-encoded in `data`) to `url` via a native request, returning the
+   * response status and `ETag` header. Used for S3 presigned multipart uploads: a browser
+   * `fetch(PUT)` from the remote-loaded WebView is blocked by CORS, while a native request
+   * isn't and can read the `ETag` directly.
+   */
+  putBinary(options: {
+    url: string;
+    data: string;
+    contentType?: string;
+  }): Promise<{ status: number; etag: string | null }>;
 
   addListener(
     eventName: "scanResult",
@@ -204,4 +215,32 @@ export async function readExportedFile(path: string): Promise<ArrayBuffer> {
     bytes[i] = binary.charCodeAt(i);
   }
   return bytes.buffer;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  // Chunk the fromCharCode calls so a large buffer doesn't blow the call-stack argument limit.
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * PUT a chunk of bytes to a presigned URL through the native bridge (no CORS), returning
+ * the response status and `ETag`. Use this instead of `fetch(presignedUrl, {method:"PUT"})`,
+ * which the remote-loaded WebView blocks with a CORS error.
+ */
+export async function putBinaryNative(
+  url: string,
+  chunk: ArrayBuffer,
+  contentType?: string,
+): Promise<{ status: number; etag: string | null }> {
+  return PlaudSdk.putBinary({
+    url,
+    data: arrayBufferToBase64(chunk),
+    ...(contentType ? { contentType } : {}),
+  });
 }

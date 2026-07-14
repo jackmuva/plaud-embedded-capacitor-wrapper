@@ -5,6 +5,7 @@ import type {
   TranscriptionTask,
   UploadPart,
 } from "@/lib/plaud-transcription";
+import { putBinaryNative } from "@/lib/plaud-sdk";
 
 export type TranscribePhase = "uploading" | "finalizing" | "submitting" | "processing";
 
@@ -72,21 +73,17 @@ export async function transcribeExportedFile(
   for (const part of presigned.Parts) {
     const start = (part.PartNumber - 1) * presigned.ChunkSize;
     const end = Math.min(start + presigned.ChunkSize, buffer.byteLength);
-    const putRes = await fetch(part.PresignedUrl, {
-      method: "PUT",
-      body: buffer.slice(start, end),
-    });
-    if (!putRes.ok) {
-      console.error("failed to upload part");
+    // Native PUT (URLSession), not fetch() — the remote-loaded WebView blocks a browser
+    // PUT to the S3 presigned URL with a CORS error.
+    const putRes = await putBinaryNative(part.PresignedUrl, buffer.slice(start, end));
+    if (putRes.status < 200 || putRes.status >= 300) {
+      console.error("failed to upload part", putRes.status);
       throw new Error(`Failed to upload part ${part.PartNumber} (${putRes.status})`);
     }
-    const etag = putRes.headers.get("etag");
+    const etag = putRes.etag;
     console.log("etag", etag);
     if (!etag) {
-      throw new Error(
-        `Part ${part.PartNumber} upload didn't return an ETag header — the S3 bucket's ` +
-        `CORS config must expose it (ExposeHeaders: ["ETag"]) for browser uploads`,
-      );
+      throw new Error(`Part ${part.PartNumber} upload didn't return an ETag header`);
     }
     partList.push({ PartNumber: part.PartNumber, ETag: etag });
     onProgress?.({
