@@ -1,5 +1,6 @@
 "use client";
 import type { PlaudFile } from "@/lib/plaud-sdk";
+import { CloseIcon, FileTextIcon } from "./icons";
 
 /** Per-session export + transcription state, cached in the page so a file that has
  * already been exported and transcribed can be re-opened without redoing the work. */
@@ -12,31 +13,6 @@ export type FileResult = {
   transcript?: string | null;
   error?: string;
 };
-
-type IconProps = { className?: string; size?: number };
-const svg = (size: number, className?: string) => ({
-  width: size,
-  height: size,
-  viewBox: "0 0 24 24",
-  fill: "none",
-  stroke: "currentColor",
-  strokeWidth: 1.75,
-  strokeLinecap: "round" as const,
-  strokeLinejoin: "round" as const,
-  className,
-});
-const CloseIcon = ({ className, size = 20 }: IconProps) => (
-  <svg {...svg(size, className)}>
-    <path d="M18 6 6 18M6 6l12 12" />
-  </svg>
-);
-const FileTextIcon = ({ className, size = 16 }: IconProps) => (
-  <svg {...svg(size, className)}>
-    <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
-    <path d="M14 2v5h5" />
-    <path d="M10 9H8M16 13H8M16 17H8" />
-  </svg>
-);
 
 export function FileModal({
   file,
@@ -53,8 +29,7 @@ export function FileModal({
   const busy = status === "exporting" || status === "transcribing";
 
   return (
-    <div
-      className="fixed inset-0 z-30 flex items-end justify-center p-4 sm:items-center"
+    <div className="min-h-1/2 fixed inset-0 z-30 flex items-end justify-center p-4 sm:items-center"
       style={{ background: "rgba(0,0,0,0.6)" }}
       onClick={onClose}
     >

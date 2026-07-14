@@ -58,3 +58,10 @@ export const FileTextIcon = ({ className, size = 16 }: IconProps) => (
   </svg>
 );
 
+
+export const CloseIcon = ({ className, size = 20 }: IconProps) => (
+  <svg {...svg(size, className)}>
+    <path d="M18 6 6 18M6 6l12 12" />
+  </svg>
+);
+
