@@ -15,6 +15,8 @@ export default function Home() {
   const [devices, setDevices] = useState<PlaudScanDevice[]>([]);
   const [files, setFiles] = useState<PlaudFile[]>([]);
   const [status, setStatus] = useState("idle");
+  const [connected, setConnected] = useState(false);
+  const [recording, setRecording] = useState<string | null>(null);
   const [exportInfo, setExportInfo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const initedRef = useRef(false);
@@ -50,19 +52,51 @@ export default function Home() {
           ),
         ),
         await PlaudSdk.addListener("connectState", ({ connected, failed }) => {
+          console.log("[Plaud] connectState", { connected, failed });
           setStatus(connected ? "connected" : failed ? "connection failed" : "disconnected");
+          setConnected(connected);
           // Once connected, pull the on-device recording list.
           if (connected) PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => {});
         }),
         await PlaudSdk.addListener("penState", (s) =>
           setStatus(`pen state ${s.state} (key ${s.keyState})`),
         ),
-        await PlaudSdk.addListener("fileList", ({ files }) => setFiles(files)),
-        await PlaudSdk.addListener("exportProgress", (p) =>
-          setExportInfo(`session ${p.sessionId}: ${p.progress}% ${p.message}`),
-        ),
+        await PlaudSdk.addListener("fileList", ({ files }) => {
+          console.log("[Plaud] fileList", files);
+          setFiles(files);
+        }),
+        await PlaudSdk.addListener("exportProgress", (p) => {
+          console.log("[Plaud] exportProgress", p);
+          setExportInfo(`session ${p.sessionId}: ${p.progress}% ${p.message}`);
+        }),
+        // Recording is driven by the physical device, not the app. Surface the
+        // start/stop/pause/resume events so they're visible, and refresh the file
+        // list once a recording stops so the new file shows up to export.
+        await PlaudSdk.addListener("recordStart", (r) => {
+          console.log("[Plaud] recordStart", r);
+          setRecording(`recording session ${r.sessionId} (scene ${r.scene})`);
+        }),
+        await PlaudSdk.addListener("recordStop", (r) => {
+          console.log("[Plaud] recordStop", r);
+          setRecording(
+            `stopped session ${r.sessionId} · ${(r.fileSize / 1024).toFixed(0)} KB` +
+              (r.fileExist ? "" : " (no file)"),
+          );
+          // A fresh recording won't be in the list fetched at connect — refresh it.
+          PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => {});
+        }),
+        await PlaudSdk.addListener("recordPause", (r) => {
+          console.log("[Plaud] recordPause", r);
+          setRecording(`paused session ${r.sessionId}`);
+        }),
+        await PlaudSdk.addListener("recordResume", (r) => {
+          console.log("[Plaud] recordResume", r);
+          setRecording(`recording session ${r.sessionId} (resumed)`);
+        }),
         await PlaudSdk.addListener("depair", ({ status }) => {
+          console.log("[Plaud] depair", status);
           setStatus(`depaired (status ${status})`);
+          setConnected(false);
           setFiles([]);
         }),
       );
@@ -133,15 +167,29 @@ export default function Home() {
   const handleExport = async (f: PlaudFile) => {
     setError(null);
     setExportInfo(`session ${f.sessionId}: starting…`);
+    console.log("[Plaud] exportAudio →", f.sessionId);
     try {
       const { outputPath } = await PlaudSdk.exportAudio({
         sessionId: f.sessionId,
         format: "mp3",
       });
+      console.log("[Plaud] exportAudio done", f.sessionId, outputPath);
       setExportInfo(`session ${f.sessionId}: saved → ${outputPath}`);
     } catch (err) {
+      console.error("[Plaud] exportAudio failed", f.sessionId, err);
       setError(err instanceof Error ? err.message : String(err));
       setExportInfo(null);
+    }
+  };
+
+  const handleRefreshFiles = async () => {
+    setError(null);
+    if (!ensureNative()) return;
+    try {
+      console.log("[Plaud] getFileList refresh");
+      await PlaudSdk.getFileList({ startSessionId: 0 });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -165,6 +213,11 @@ export default function Home() {
       </div>
 
       <div className="text-sm text-zinc-600">status: {status}</div>
+      {recording && (
+        <div className="max-w-xs text-center text-sm font-medium text-emerald-600">
+          ● {recording}
+        </div>
+      )}
       {error && <div className="max-w-xs text-center text-sm text-red-600">{error}</div>}
 
       {/* Discovered devices — tap to connect. */}
@@ -185,9 +238,22 @@ export default function Home() {
       )}
 
       {/* Recordings on the connected device — tap to export/decode. */}
-      {files.length > 0 && (
+      {connected && (
         <section className="mt-2 flex w-full max-w-sm flex-col gap-1">
-          <h2 className="text-xs font-semibold uppercase text-zinc-400">Recordings</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase text-zinc-400">Recordings</h2>
+            <button
+              onClick={handleRefreshFiles}
+              className="text-xs text-blue-600 active:text-blue-800"
+            >
+              Refresh
+            </button>
+          </div>
+          {files.length === 0 && (
+            <div className="text-xs text-zinc-400">
+              no recordings yet — record on the device, then Refresh
+            </div>
+          )}
           {files.map((f) => (
             <button
               key={f.sessionId}

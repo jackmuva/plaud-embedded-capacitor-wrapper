@@ -256,6 +256,44 @@ public class PlaudSdkPlugin: CAPPlugin, CAPBridgedPlugin, PlaudDeviceAgentProtoc
         notify("bind", ["sn": sn as Any, "status": status, "protVersion": protVersion])
     }
 
+    // MARK: - Recording (device-initiated)
+
+    // These are driven by the physical device (button press / VAD), not by the app —
+    // there are no start/stop record methods on the JS surface. Previously the plugin
+    // implemented none of them, so the SDK's `onRecordStart`/`bleRecordStop` internal
+    // logs were the *only* trace of recording; nothing reached JS. Forward all four as
+    // events so the UI can react (e.g. refresh the file list once a recording stops).
+
+    public func bleRecordStart(sessionId: Int, start: Int, status: Int, scene: Int,
+                               startTime: Int, reason: Int) {
+        notify("recordStart", [
+            "sessionId": sessionId, "start": start, "status": status,
+            "scene": scene, "startTime": startTime, "reason": reason
+        ])
+    }
+
+    public func bleRecordStop(sessionId: Int, reason: Int, fileExist: Bool, fileSize: Int) {
+        notify("recordStop", [
+            "sessionId": sessionId, "reason": reason,
+            "fileExist": fileExist, "fileSize": fileSize
+        ])
+    }
+
+    public func bleRecordPause(sessionId: Int, reason: Int, fileExist: Bool, fileSize: Int) {
+        notify("recordPause", [
+            "sessionId": sessionId, "reason": reason,
+            "fileExist": fileExist, "fileSize": fileSize
+        ])
+    }
+
+    public func bleRecordResume(sessionId: Int, start: Int, status: Int, scene: Int,
+                                startTime: Int) {
+        notify("recordResume", [
+            "sessionId": sessionId, "start": start, "status": status,
+            "scene": scene, "startTime": startTime
+        ])
+    }
+
     public func bleDepair(_ status: Int) {
         notify("depair", ["status": status])
     }

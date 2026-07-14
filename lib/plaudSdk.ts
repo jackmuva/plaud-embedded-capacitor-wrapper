@@ -53,6 +53,33 @@ export interface PlaudExportProgress {
   message: string;
 }
 
+/** Device-initiated recording started (physical button / VAD). */
+export interface PlaudRecordStart {
+  sessionId: number;
+  start: number;
+  status: number;
+  scene: number;
+  startTime: number;
+  reason: number;
+}
+
+/** Device-initiated recording stopped/paused, with the resulting file info. */
+export interface PlaudRecordStop {
+  sessionId: number;
+  reason: number;
+  fileExist: boolean;
+  fileSize: number;
+}
+
+/** Device-initiated recording resumed. */
+export interface PlaudRecordResume {
+  sessionId: number;
+  start: number;
+  status: number;
+  scene: number;
+  startTime: number;
+}
+
 export type PlaudAudioFormat = "pcm" | "mp3" | "wav" | "opus";
 
 /**
@@ -131,6 +158,22 @@ export interface PlaudSdkPlugin {
   addListener(
     eventName: "exportProgress",
     listener: (data: PlaudExportProgress) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "recordStart",
+    listener: (data: PlaudRecordStart) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "recordStop",
+    listener: (data: PlaudRecordStop) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "recordPause",
+    listener: (data: PlaudRecordStop) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    eventName: "recordResume",
+    listener: (data: PlaudRecordResume) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "depair",
