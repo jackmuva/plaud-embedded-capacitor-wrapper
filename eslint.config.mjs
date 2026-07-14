@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored design-system reference (skill assets, not app code).
+    "plaud-design-system/**",
+    // Native build output (vendored frameworks / Capacitor bridge).
+    "ios/**/.build/**",
   ]),
 ]);
 
