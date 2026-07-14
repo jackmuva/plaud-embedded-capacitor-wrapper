@@ -338,10 +338,17 @@ export default function Home() {
                   : `transcribing… (${p.status})`,
         });
       });
+      console.log("[Plaud] transcription task", task);
+      // `data.text` is the full transcript, but some models only populate the
+      // per-segment `data.results[]` — fall back to joining those.
+      const text =
+        task.data.text?.trim() ||
+        task.data.results?.map((s) => s.text).join(" ").trim() ||
+        null;
       updateResult(sessionId, {
         status: "ready",
         transcribeStatus: "transcription complete",
-        transcript: task.data.text ?? null,
+        transcript: text,
       });
     } catch (err) {
       console.error("[Plaud] transcription failed", err);

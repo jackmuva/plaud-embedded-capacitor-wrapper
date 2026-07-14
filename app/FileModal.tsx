@@ -136,7 +136,7 @@ export function FileModal({
         )}
 
         {/* Transcript, once ready. */}
-        {result?.transcript != null && (
+        {result?.status === "ready" && (
           <div className="mt-4">
             <p className="overline mb-2 flex items-center gap-1.5">
               <FileTextIcon size={14} />
@@ -147,11 +147,13 @@ export function FileModal({
               style={{
                 background: "var(--dev-surface-input)",
                 border: "1px solid var(--dev-border-subtle)",
-                color: "var(--dev-text-light)",
+                color: result.transcript
+                  ? "var(--dev-text-light)"
+                  : "var(--dev-text-dim)",
                 lineHeight: 1.5,
               }}
             >
-              {result.transcript || "(empty transcript)"}
+              {result.transcript || "No speech detected."}
             </div>
           </div>
         )}
