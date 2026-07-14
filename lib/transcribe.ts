@@ -18,6 +18,21 @@ const TERMINAL_STATUSES = new Set(["SUCCESS", "FAILURE", "REVOKED"]);
 const POLL_INTERVAL_MS = 5000;
 const MAX_POLL_ATTEMPTS = 120; // ~10 minutes
 
+/** Default transcription params — kept in sync with the embedded-playground reference. */
+const DEFAULT_TRANSCRIPTION_PARAMS = {
+  transcribe: {
+    language: "auto",
+    model: "plaud-fast-whisper" as const,
+  },
+  vad: {
+    decode_silence: false,
+  },
+  diarization: {
+    enabled: false,
+    return_embedding: false,
+  },
+};
+
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, {
     method: "POST",
@@ -91,6 +106,7 @@ export async function transcribeExportedFile(
   onProgress?.({ phase: "submitting" });
   let task = await postJson<TranscriptionTask>("/api/transcription/submit", {
     file_url: completed.DownloadUrl,
+    params: DEFAULT_TRANSCRIPTION_PARAMS,
   });
 
   onProgress?.({ phase: "processing", status: task.status });
