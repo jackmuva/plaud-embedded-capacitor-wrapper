@@ -77,9 +77,11 @@ export async function transcribeExportedFile(
       body: buffer.slice(start, end),
     });
     if (!putRes.ok) {
+      console.error("failed to upload part");
       throw new Error(`Failed to upload part ${part.PartNumber} (${putRes.status})`);
     }
     const etag = putRes.headers.get("etag");
+    console.log("etag", etag);
     if (!etag) {
       throw new Error(
         `Part ${part.PartNumber} upload didn't return an ETag header — the S3 bucket's ` +
@@ -94,6 +96,7 @@ export async function transcribeExportedFile(
   }
 
   onProgress?.({ phase: "finalizing" });
+  console.log("completing upload");
   const completed = await postJson<CompletedUpload>("/api/transcription/complete", {
     access_token: accessToken,
     file_id: presigned.FileId,
