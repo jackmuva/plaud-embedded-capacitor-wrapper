@@ -34,7 +34,7 @@ export function FileModal({
       onClick={onClose}
     >
       <div
-        className="dev-card w-full max-w-md p-5"
+        className="dev-card flex h-[66vh] w-full max-w-md flex-col p-5"
         style={{ boxShadow: "var(--shadow-lg)" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -112,13 +112,13 @@ export function FileModal({
 
         {/* Transcript, once ready. */}
         {result?.status === "ready" && (
-          <div className="mt-4">
+          <div className="mt-4 flex min-h-0 flex-1 flex-col">
             <p className="overline mb-2 flex items-center gap-1.5">
               <FileTextIcon size={14} />
               Transcript
             </p>
             <div
-              className="max-h-48 overflow-y-auto rounded p-3 text-[13px]"
+              className="min-h-0 flex-1 overflow-y-auto rounded p-3 text-[13px]"
               style={{
                 background: "var(--dev-surface-input)",
                 border: "1px solid var(--dev-border-subtle)",
