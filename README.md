@@ -103,15 +103,15 @@ Open the project (`npx cap open ios`), then **File â†’ Add Package Dependenciesâ
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'ai.plaud.pwademo',
-  appName: 'Plaud PWA Demo',
+  appId: 'ai.plaud.capacitordemo',
+  appName: 'Plaud Capacitor Demo',
   // Required by Capacitor even when loading a remote URL; its contents are
   // ignored at runtime because `server.url` is set below.
   webDir: 'public',
   server: {
     // The native shell loads your deployed site and Capacitor injects the
     // native bridge, so the plugin can reach iOS CoreBluetooth.
-    url: 'https://pwa-demo-plaud.vercel.app',
+    url: 'https://plaud-capacitor-demo.vercel.app',
     cleartext: false,
   },
 };

@@ -25,7 +25,7 @@ const config: CapacitorConfig = {
   // because server.url is set.
   webDir: 'public',
   server: {
-    url: 'https://pwa-demo-plaud.vercel.app',
+    url: 'https://plaud-capacitor-demo.vercel.app',
     cleartext: false,
   },
 };

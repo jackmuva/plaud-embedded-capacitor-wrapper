@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
   server: {
     // The native shell loads the live Vercel site and Capacitor injects the
     // native bridge, so the BLE plugin talks to iOS CoreBluetooth.
-    url: 'https://pwa-demo-plaud.vercel.app',
+    url: 'https://plaud-capacitor-demo.vercel.app',
     cleartext: false,
   },
 };
